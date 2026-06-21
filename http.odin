@@ -1,5 +1,6 @@
 package main
 
+import "core:fmt"
 Method :: enum {
 	GET,
 	HEAD,
@@ -31,4 +32,10 @@ Response :: struct {
 	status_code: int,
 	headers:     map[string]string,
 	body:        []u8,
+}
+
+parse_request :: proc(raw_data: []u8) -> Request {
+	fmt.printfln("raw_req: %v", raw_data)
+
+	return Request{}
 }

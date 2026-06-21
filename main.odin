@@ -40,7 +40,7 @@ main :: proc() {
 		context.allocator = req_allocator
 
 		req := Request {
-			Headers = make(map[string]string),
+			headers = make(map[string]string),
 		}
 
 
@@ -54,6 +54,7 @@ main :: proc() {
 
 		raw_request := read_buf[:bytes_read]
 
+		parse_request(raw_request)
 		// TODO: Parsing
 
 		response := "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: text/plain\r\n\r\nOK"
