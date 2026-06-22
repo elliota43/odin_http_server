@@ -1,6 +1,39 @@
 package main
 
 import "core:fmt"
+import "core:strings"
+
+Parse_Error :: enum {
+	None,
+	Malformed_Request_Line,
+	Invalid_Method,
+	Invalid_Version,
+	Malformed_Header,
+	Header_Too_Large,
+	Incomplete_Request,
+}
+
+parse_error_message :: proc(err: Parse_Error) -> (message: string) {
+	switch err {
+	case .Malformed_Request_Line:
+		message = "Malformed Request Line"
+	case .Invalid_Version:
+		message = "Invalid Version"
+	case .Header_Too_Large:
+		message = "Header Too Large"
+	case .Invalid_Method:
+		message = "Invalid Method"
+	case .None:
+		message = "None"
+	case .Malformed_Header:
+		message = "Malformed Header"
+	case .Incomplete_Request:
+		message = "Incomplete Request"
+	}
+
+	return
+}
+
 Method :: enum {
 	GET,
 	HEAD,
@@ -26,6 +59,7 @@ Request :: struct {
 	version: Version,
 	headers: map[string]string,
 	body:    []u8,
+	raw:     []u8,
 }
 
 Response :: struct {
@@ -34,10 +68,148 @@ Response :: struct {
 	body:        []u8,
 }
 
-parse_request :: proc(raw_data: []u8) -> Request {
-	fmt.printfln("raw_req: %v", raw_data)
+parse_method_from_string :: proc(method_str: string) -> Method {
+	switch method_str {
+	case "GET":
+		return .GET
+	case "POST":
+		return .POST
+	case "HEAD":
+		return .HEAD
+	case "PUT":
+		return .PUT
+	case "DELETE":
+		return .DELETE
+	case "CONNECT":
+		return .CONNECT
+	case "OPTIONS":
+		return .OPTIONS
+	case "TRACE":
+		return .TRACE
+	case "PATCH":
+		return .PATCH
+	case:
+		return .Invalid
+	}
+}
 
-	return Request{}
+parse_http_version_from_string :: proc(http_str: string) -> Version {
+	trimmed_str := strings.trim_right(http_str, "\r\n")
+	switch trimmed_str {
+	case "HTTP/1.0":
+		return .HTTP_1_0
+	case "HTTP/1.1":
+		return .HTTP_1_1
+	case:
+		return .Unknown
+	}
+}
+
+parse_request_line :: proc(
+	req_line: string,
+) -> (
+	method: Method,
+	uri: string,
+	version: Version,
+	parse_err: Parse_Error,
+) {
+	parts := strings.split(req_line, " ")
+	defer delete(parts)
+
+	if len(parts) < 3 {
+		return Method.Invalid, "", Version.Unknown, Parse_Error.Malformed_Request_Line
+	}
+
+	method = parse_method_from_string(parts[0])
+
+	if method == .Invalid {
+		return Method.Invalid, "", Version.Unknown, Parse_Error.Malformed_Request_Line
+	}
+
+	uri = parts[1]
+	version = parse_http_version_from_string(parts[2])
+
+	if version == .Unknown {
+		return Method.Invalid, "", Version.Unknown, Parse_Error.Malformed_Request_Line
+	}
+
+	parse_err = .None
+
+	return method, uri, version, parse_err
+}
+
+parse_headers :: proc(headers_str: string, req: ^Request) -> Parse_Error {
+	req.headers = make(map[string]string)
+
+	lines := strings.split(headers_str, "\r\n")
+	defer delete(lines)
+
+	for line in lines {
+		if len(line) == 0 {
+			continue
+		}
+
+		parts := strings.split_n(line, ":", 2)
+		defer delete(parts)
+
+		if len(parts) != 2 {
+			return .Malformed_Header
+		}
+
+		raw_key := strings.trim_space(parts[0])
+		value := strings.trim_space(parts[1])
+
+		key := strings.to_lower(raw_key)
+
+		req.headers[key] = value
+	}
+
+	return .None
+}
+
+parse_request :: proc(raw_data: []u8) -> (req: ^Request, parse_err: Parse_Error) {
+
+	req = new(Request)
+
+	parts, ok := strings.split_n(string(raw_data), "\r\n\r\n", 2)
+	defer delete(parts)
+	if ok != .None {
+		free(req)
+		return nil, .Incomplete_Request
+	}
+
+	header_block := parts[0]
+	raw_body := parts[1]
+
+	header_parts: []string
+	header_parts, ok = strings.split_n(string(header_block), "\r\n", 2)
+	defer delete(header_parts)
+	if ok != .None {
+		free(req)
+		return nil, .Malformed_Header
+	}
+
+	request_line := header_parts[0]
+	rest_of_headers := header_parts[1]
+
+	method, uri, version, err := parse_request_line(request_line)
+	if err != .None {
+		free(req)
+		return nil, err
+	}
+
+	req.method = method
+	req.uri = uri
+	req.version = version
+
+	parse_headers_err := parse_headers(rest_of_headers, req)
+	if parse_headers_err != .None {
+		delete(req.headers)
+		free(req)
+		return nil, parse_headers_err
+	}
+
+	return req, .None
 }
 
 Status :: enum {
@@ -102,6 +274,7 @@ Status :: enum {
 	Loop_Detected                   = 508,
 	Not_Extended                    = 510,
 	Network_Authentication_Required = 511,
+	Unknown                         = 1000,
 }
 
 status_reason :: proc(s: Status) -> string {
@@ -230,5 +403,9 @@ status_reason :: proc(s: Status) -> string {
 		return "Not Extended"
 	case .Network_Authentication_Required:
 		return "Network Authentication Required"
+	case .Unknown:
+		return "Unknown"
 	}
+
+	return "Unknown Status"
 }
