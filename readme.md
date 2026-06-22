@@ -9,5 +9,5 @@ Right now, focusing on:
 - [x] parsing request
 - [x] build response
 - [x] Route Handlers
-- [ ] Thread Pool
+- [x] Thread Pool
 
