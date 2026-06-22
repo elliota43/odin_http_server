@@ -4,13 +4,53 @@ import "core:fmt"
 import "core:mem"
 import "core:net"
 import "core:strings"
+import "core:sync"
 import "core:thread"
 
 // Optional callback for `server_listen_and_serve`.
 On_Listen_Callback :: #type proc(endpoint: net.Endpoint)
 
+Thread_Pool :: struct {
+	queue:  [dynamic]net.TCP_Socket,
+	mutex:  sync.Mutex,
+	cond:   sync.Cond,
+	router: ^Router,
+}
+
+// Initialize thread pool and spawn `num_worker` worker threads.
+thread_pool_init :: proc(pool: ^Thread_Pool, num_workers: int, router: ^Router) {
+	pool.queue = make([dynamic]net.TCP_Socket)
+	pool.router = router
+
+	for i in 0 ..< num_workers {
+		t := thread.create(worker_routine)
+		t.data = rawptr(pool)
+		thread.start(t)
+	}
+}
+
+worker_routine :: proc(t: ^thread.Thread) {
+	pool := cast(^Thread_Pool)t.data
+
+	for {
+		sync.mutex_lock(&pool.mutex)
+
+		for len(pool.queue) == 0 {
+			sync.cond_wait(&pool.cond, &pool.mutex)
+		}
+
+		client_sock := pool.queue[0]
+
+		ordered_remove(&pool.queue, 0)
+		sync.mutex_unlock(&pool.mutex)
+
+		server_handle_connection(client_sock, pool.router)
+	}
+}
+
 Server :: struct {
 	router: Router,
+	pool:   Thread_Pool,
 }
 
 // Holds context for connection (1:1 connection:thread)
@@ -21,6 +61,7 @@ Connection_Context :: struct {
 
 server_init :: proc(s: ^Server) {
 	router_init(&s.router)
+	thread_pool_init(&s.pool, 8, &s.router)
 }
 
 // Binds to endpoint and enters a loop listening for connections.
@@ -47,13 +88,10 @@ server_listen_and_serve :: proc(
 			continue
 		}
 
-		data := new(Connection_Context)
-		data.client_sock = client_sock
-		data.router = &s.router
-
-		t := thread.create(handle_connection_thread)
-		t.data = rawptr(data)
-		thread.start(t)
+		sync.mutex_lock(&s.pool.mutex)
+		append(&s.pool.queue, client_sock)
+		sync.cond_signal(&s.pool.cond)
+		sync.mutex_unlock(&s.pool.mutex)
 	}
 }
 
