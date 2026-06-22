@@ -64,9 +64,26 @@ main :: proc() {
 
 		fmt.printfln("===============================\n")
 
-		response := "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: text/plain\r\n\r\nOK"
+		res: Response
+		response_init(&res)
 
-		_, send_err := net.send_tcp(client_sock, transmute([]u8)response)
+		if req.method == .GET && req.uri == "/hello" {
+			res.status = .OK
+			response_set_header(&res, "Content-Type", "text/plain")
+			response_set_body_string(&res, "Hey there!")
+		} else if req.method == .POST && req.uri == "/echo" {
+			res.status = .Created // 201
+			response_set_header(&res, "Content-Type", "application/json")
+			response_set_body(&res, req.body)
+		} else {
+			res.status = .Not_Found
+			response_set_header(&res, "Content-Type", "text/plain")
+			response_set_body_string(&res, "404 - Not Found")
+		}
+
+		raw_response := response_serialize(&res)
+
+		_, send_err := net.send_tcp(client_sock, raw_response)
 		if send_err != nil {
 			fmt.eprintfln("error sending response: %v", send_err)
 		}

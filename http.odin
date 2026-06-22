@@ -66,9 +66,55 @@ Request :: struct {
 }
 
 Response :: struct {
-	status_code: int,
-	headers:     map[string]string,
-	body:        []u8,
+	version:  Version,
+	status:   Status,
+	headers:  map[string]string,
+	body:     []u8,
+	has_body: bool,
+	body_len: uint,
+}
+
+response_init :: proc(res: ^Response) {
+	res.version = .HTTP_1_1
+	res.status = .OK
+	res.headers = make(map[string]string)
+}
+
+response_set_header :: proc(res: ^Response, key: string, value: string) {
+	res.headers[key] = value
+}
+
+response_set_body :: proc(res: ^Response, data: []u8) {
+	res.body = data
+	res.has_body = true
+	res.body_len = uint(len(data))
+
+	len_str := fmt.aprintf("%d", len(data))
+
+	response_set_header(res, "Content-Length", len_str)
+}
+
+response_set_body_string :: proc(res: ^Response, text: string) {
+	response_set_body(res, transmute([]u8)text)
+}
+
+response_serialize :: proc(res: ^Response, allocator := context.allocator) -> []u8 {
+	b := strings.builder_make(allocator)
+
+	version_str := res.version == .HTTP_1_0 ? "HTTP/1.0" : "HTTP/1.1"
+	fmt.sbprintf(&b, "%s %d %s\r\n", version_str, int(res.status), status_reason(res.status))
+
+	for key, value in res.headers {
+		fmt.sbprintf(&b, "%s: %s\r\n", key, value)
+	}
+
+	strings.write_string(&b, "\r\n")
+
+	if len(res.body) > 0 {
+		append(&b.buf, ..res.body)
+	}
+
+	return b.buf[:]
 }
 
 parse_method_from_string :: proc(method_str: string) -> Method {
