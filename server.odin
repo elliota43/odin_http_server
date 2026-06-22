@@ -6,15 +6,17 @@ import "core:net"
 import "core:strings"
 import "core:sync"
 import "core:thread"
+import "core:time"
 
 // Optional callback for `server_listen_and_serve`.
 On_Listen_Callback :: #type proc(endpoint: net.Endpoint)
 
 Thread_Pool :: struct {
-	queue:  [dynamic]net.TCP_Socket,
-	mutex:  sync.Mutex,
-	cond:   sync.Cond,
-	router: ^Router,
+	queue:      [dynamic]net.TCP_Socket,
+	mutex:      sync.Mutex,
+	cond_empty: sync.Cond,
+	cond_full:  sync.Cond,
+	router:     ^Router,
 }
 
 // Initialize thread pool and spawn `num_worker` worker threads.
@@ -36,12 +38,13 @@ worker_routine :: proc(t: ^thread.Thread) {
 		sync.mutex_lock(&pool.mutex)
 
 		for len(pool.queue) == 0 {
-			sync.cond_wait(&pool.cond, &pool.mutex)
+			sync.cond_wait(&pool.cond_empty, &pool.mutex)
 		}
 
 		client_sock := pool.queue[0]
 
 		ordered_remove(&pool.queue, 0)
+		sync.cond_signal(&pool.cond_full)
 		sync.mutex_unlock(&pool.mutex)
 
 		server_handle_connection(client_sock, pool.router)
@@ -59,9 +62,10 @@ Connection_Context :: struct {
 	router:      ^Router,
 }
 
+// Initialize server. Initializes the thread pool as well.
 server_init :: proc(s: ^Server) {
 	router_init(&s.router)
-	thread_pool_init(&s.pool, 8, &s.router)
+	thread_pool_init(&s.pool, 64, &s.router)
 }
 
 // Binds to endpoint and enters a loop listening for connections.
@@ -82,15 +86,24 @@ server_listen_and_serve :: proc(
 	}
 
 	for {
+		// Don't accept new connections if the queue is full, leave in OS backlog
+		sync.mutex_lock(&s.pool.mutex)
+		for len(s.pool.queue) >= 100 {
+			sync.cond_wait(&s.pool.cond_full, &s.pool.mutex)
+		}
+		sync.mutex_unlock(&s.pool.mutex)
+
+
 		client_sock, source, accept_err := net.accept_tcp(server_sock)
 		if accept_err != nil {
 			fmt.eprintfln("error accepting connection: %v", accept_err)
+			time.sleep(time.Millisecond * 10)
 			continue
 		}
 
 		sync.mutex_lock(&s.pool.mutex)
 		append(&s.pool.queue, client_sock)
-		sync.cond_signal(&s.pool.cond)
+		sync.cond_signal(&s.pool.cond_empty)
 		sync.mutex_unlock(&s.pool.mutex)
 	}
 }
