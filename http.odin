@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:strconv"
 import "core:strings"
 
 Parse_Error :: enum {
@@ -54,12 +55,14 @@ Version :: enum {
 }
 
 Request :: struct {
-	method:  Method,
-	uri:     string,
-	version: Version,
-	headers: map[string]string,
-	body:    []u8,
-	raw:     []u8,
+	method:   Method,
+	uri:      string,
+	version:  Version,
+	headers:  map[string]string,
+	body:     []u8,
+	raw:      []u8,
+	has_body: bool,
+	body_len: uint,
 }
 
 Response :: struct {
@@ -160,9 +163,35 @@ parse_headers :: proc(headers_str: string, req: ^Request) -> Parse_Error {
 		value := strings.trim_space(parts[1])
 
 		key := strings.to_lower(raw_key)
-
 		req.headers[key] = value
+
+		if key == "content-length" {
+			val_as_int, ok := strconv.parse_uint(value, 10)
+			if !ok {
+				return .Malformed_Header
+			}
+
+			req.has_body = true
+			req.body_len = val_as_int
+		}
 	}
+
+	return .None
+}
+
+parse_body :: proc(raw_body_str: string, req: ^Request) -> Parse_Error {
+	if !req.has_body {
+		req.body = nil
+		return .None
+	}
+
+	if uint(len(raw_body_str)) < req.body_len {
+		return .Incomplete_Request
+	}
+
+	body_start_idx := len(req.raw) - len(raw_body_str)
+
+	req.body = req.raw[body_start_idx:body_start_idx + int(req.body_len)]
 
 	return .None
 }
@@ -170,6 +199,7 @@ parse_headers :: proc(headers_str: string, req: ^Request) -> Parse_Error {
 parse_request :: proc(raw_data: []u8) -> (req: ^Request, parse_err: Parse_Error) {
 
 	req = new(Request)
+	req.raw = raw_data
 
 	parts, ok := strings.split_n(string(raw_data), "\r\n\r\n", 2)
 	defer delete(parts)
@@ -204,9 +234,18 @@ parse_request :: proc(raw_data: []u8) -> (req: ^Request, parse_err: Parse_Error)
 
 	parse_headers_err := parse_headers(rest_of_headers, req)
 	if parse_headers_err != .None {
+		for key, _ in req.headers {delete(key)}
 		delete(req.headers)
 		free(req)
 		return nil, parse_headers_err
+	}
+
+	parse_body_err := parse_body(raw_body, req)
+	if parse_body_err != .None {
+		for key, _ in req.headers {delete(key)}
+		delete(req.headers)
+		free(req)
+		return nil, parse_body_err
 	}
 
 	return req, .None

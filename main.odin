@@ -39,11 +39,6 @@ main :: proc() {
 		req_allocator := mem.arena_allocator(&req_arena)
 		context.allocator = req_allocator
 
-		req := Request {
-			headers = make(map[string]string),
-		}
-
-
 		read_buf: [1024]u8
 		bytes_read, recv_err := net.recv_tcp(client_sock, read_buf[:])
 		if recv_err != nil {
@@ -54,8 +49,20 @@ main :: proc() {
 
 		raw_request := read_buf[:bytes_read]
 
-		parse_request(raw_request)
-		// TODO: Parsing
+		req, parse_req_err := parse_request(raw_request)
+		if parse_req_err != nil {
+			fmt.eprintfln("err: %v", parse_error_message(parse_req_err))
+			net.close(client_sock)
+			continue
+		}
+
+		fmt.printfln("\n=== New Request ===")
+		fmt.printfln("Request struct: %#v", req^)
+		if req.has_body {
+			fmt.printfln("Body Text: %s", string(req.body))
+		}
+
+		fmt.printfln("===============================\n")
 
 		response := "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: text/plain\r\n\r\nOK"
 
