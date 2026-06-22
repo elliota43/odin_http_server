@@ -3,6 +3,7 @@ package main
 import "core:fmt"
 import "core:mem"
 import "core:net"
+import "core:strings"
 import "core:thread"
 
 // Optional callback for `server_listen_and_serve`.
@@ -75,16 +76,37 @@ server_handle_connection :: proc(client_sock: net.TCP_Socket, router: ^Router) {
 	req_allocator := mem.arena_allocator(&req_arena)
 	context.allocator = req_allocator
 
+	raw_request := make([dynamic]u8, context.allocator)
+
 	read_buf: [8192]u8
-	bytes_read, recv_err := net.recv_tcp(client_sock, read_buf[:])
-	if recv_err != nil {
-		fmt.eprintfln("error reading from socket: %v", recv_err)
-		return
+
+	for {
+		bytes_read, recv_err := net.recv_tcp(client_sock, read_buf[:])
+
+		if recv_err != nil {
+			// connection reset / network err
+			return
+		}
+
+		if bytes_read == 0 {
+			// client gracefully closed (EOF)
+			return
+		}
+
+		append(&raw_request, ..read_buf[:bytes_read])
+
+		// did we reach the end of the headers
+		if strings.contains(string(raw_request[:]), "\r\n\r\n") {
+			break
+		}
+
+		if len(raw_request) > 8192 {
+			fmt.eprintfln("error: incoming request headers exceeded 8KB limit")
+			return
+		}
 	}
 
-	raw_request := read_buf[:bytes_read]
-
-	req, parse_req_err := parse_request(raw_request)
+	req, parse_req_err := parse_request(raw_request[:])
 	if parse_req_err != nil {
 		fmt.eprintfln("err: %v", parse_error_message(parse_req_err))
 		return
