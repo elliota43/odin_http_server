@@ -15,6 +15,10 @@ handle_echo :: proc(req: ^Request, res: ^Response) {
 	response_set_body(res, req.body)
 }
 
+on_server_start :: proc(endpoint: net.Endpoint) {
+	fmt.printfln("Server successfully started and listening on %v", net.to_string(endpoint))
+}
+
 main :: proc() {
 	endpoint, ep_ok := net.parse_endpoint("127.0.0.1:8080")
 	if !ep_ok {
@@ -27,5 +31,5 @@ main :: proc() {
 
 	router_add_route(&srv.router, .GET, "/hello", handle_hello)
 	router_add_route(&srv.router, .POST, "/echo", handle_echo)
-	server_listen_and_serve(&srv, endpoint)
+	server_listen_and_serve(&srv, endpoint, on_server_start)
 }

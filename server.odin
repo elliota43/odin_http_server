@@ -3,17 +3,31 @@ package main
 import "core:fmt"
 import "core:mem"
 import "core:net"
+import "core:thread"
 
+// Optional callback for `server_listen_and_serve`.
+On_Listen_Callback :: #type proc(endpoint: net.Endpoint)
 
 Server :: struct {
 	router: Router,
+}
+
+// Holds context for connection (1:1 connection:thread)
+Connection_Context :: struct {
+	client_sock: net.TCP_Socket,
+	router:      ^Router,
 }
 
 server_init :: proc(s: ^Server) {
 	router_init(&s.router)
 }
 
-server_listen_and_serve :: proc(s: ^Server, endpoint: net.Endpoint) {
+// Binds to endpoint and enters a loop listening for connections.
+server_listen_and_serve :: proc(
+	s: ^Server,
+	endpoint: net.Endpoint,
+	on_listen: On_Listen_Callback = nil,
+) {
 	server_sock, listen_err := net.listen_tcp(endpoint)
 	if listen_err != nil {
 		fmt.eprintfln("error starting server: %v", listen_err)
@@ -21,7 +35,9 @@ server_listen_and_serve :: proc(s: ^Server, endpoint: net.Endpoint) {
 	}
 	defer net.close(server_sock)
 
-	fmt.printfln("Listening for incoming connections on %v...", net.to_string(endpoint))
+	if on_listen != nil {
+		on_listen(endpoint)
+	}
 
 	for {
 		client_sock, source, accept_err := net.accept_tcp(server_sock)
@@ -30,8 +46,23 @@ server_listen_and_serve :: proc(s: ^Server, endpoint: net.Endpoint) {
 			continue
 		}
 
-		server_handle_connection(client_sock, &s.router)
+		data := new(Connection_Context)
+		data.client_sock = client_sock
+		data.router = &s.router
+
+		t := thread.create(handle_connection_thread)
+		t.data = rawptr(data)
+		thread.start(t)
 	}
+}
+
+handle_connection_thread :: proc(t: ^thread.Thread) {
+	data := cast(^Connection_Context)t.data
+	client_sock := data.client_sock
+	router := data.router
+	free(data)
+
+	server_handle_connection(client_sock, router)
 }
 
 server_handle_connection :: proc(client_sock: net.TCP_Socket, router: ^Router) {
