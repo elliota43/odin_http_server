@@ -247,6 +247,13 @@ parse_request :: proc(raw_data: []u8) -> (req: ^Request, parse_err: Parse_Error)
 	req = new(Request)
 	req.raw = raw_data
 
+	fmt.printfln("%#v", string(raw_data))
+
+	if len(raw_data) == 0 {
+		free(req)
+		return nil, .Incomplete_Request
+	}
+
 	parts, ok := strings.split_n(string(raw_data), "\r\n\r\n", 2)
 	defer delete(parts)
 	if ok != .None {
